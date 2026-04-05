@@ -18,13 +18,13 @@ PAYER_POLICY_INDEXES = {
         "https://www.uhcprovider.com/en/policies-protocols/commercial-policies/commercial-medical-drug-policies.html",
     ],
     "cigna": [
-    "https://static.cigna.com/assets/chcp/pdf/coveragePolicies/medical/ad_a004_administrativepolicy_preventive_care_services.pdf",
+        "https://static.cigna.com/assets/chcp/pdf/coveragePolicies/medical/ad_a004_administrativepolicy_preventive_care_services.pdf",
     ],                                                     
-    "bcbs": [
-        "https://www.bcbsnc.com/content/providers/clinical-policy-bulletins/index.htm",
+   "bcbs": [
+        "https://www.bcbsnc.com/assets/providers/public/pdfs/drug-policy-bulletins/index.htm",
     ],
-    "bluecross": [
-        "https://www.bcbsnc.com/content/providers/clinical-policy-bulletins/index.htm",
+"bluecross": [
+        "https://www.bcbsnc.com/assets/providers/public/pdfs/drug-policy-bulletins/index.htm",
     ],
     "aetna": [
         "https://www.aetna.com/health-care-professionals/clinical-policy-bulletins/medical-clinical-policy-bulletins.html",
