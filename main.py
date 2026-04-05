@@ -9,57 +9,96 @@ from typing import Optional
 
 app = FastAPI()
 
-# Verified working policy index URLs per payer
 PAYER_POLICY_INDEXES = {
-    "uhc": [
-        "https://www.uhcprovider.com/en/policies-protocols/commercial-policies/commercial-medical-drug-policies.html",
-    ],
-    "united": [
-        "https://www.uhcprovider.com/en/policies-protocols/commercial-policies/commercial-medical-drug-policies.html",
-    ],
-    "cigna": [
-        "https://static.cigna.com/assets/chcp/pdf/coveragePolicies/medical/ad_a004_administrativepolicy_preventive_care_services.pdf",
-    ],
-    "bcbs": [
-        "https://www.bluecrossnc.com/providers/policies-guidelines-codes/commercial-medical-policy-updates",
-    ],
-    "bluecross": [
-        "https://www.bluecrossnc.com/providers/policies-guidelines-codes/commercial-medical-policy-updates",
-    ],
-    "aetna": [
-        "https://www.aetna.com/health-care-professionals/clinical-policy-bulletins/medical-clinical-policy-bulletins.html",
-    ],
-    "emblemhealth": [
-        "https://www.emblemhealth.com/providers/clinical-resources/medical-policies",
-    ],
+    # UnitedHealthcare
+    "uhc": ["https://www.uhcprovider.com/en/policies-protocols/commercial-policies/commercial-medical-drug-policies.html"],
+    "united": ["https://www.uhcprovider.com/en/policies-protocols/commercial-policies/commercial-medical-drug-policies.html"],
+    "unitedhealthcare": ["https://www.uhcprovider.com/en/policies-protocols/commercial-policies/commercial-medical-drug-policies.html"],
+
+    # Cigna
+    "cigna": ["https://static.cigna.com/assets/chcp/pdf/coveragePolicies/medical/ad_a004_administrativepolicy_preventive_care_services.pdf"],
+
+    # EmblemHealth
+    "emblemhealth": ["https://www.emblemhealth.com/providers/clinical-resources/medical-policies"],
+    "emblem": ["https://www.emblemhealth.com/providers/clinical-resources/medical-policies"],
+
+    # UPMC Health Plan
+    "upmc": ["https://www.upmchealthplan.com/providers/medicalpolicies/priorauth.aspx"],
+    "upmc health plan": ["https://www.upmchealthplan.com/providers/medicalpolicies/priorauth.aspx"],
+
+    # Priority Health
+    "priority health": ["https://www.priorityhealth.com/provider/medical-drug-list"],
+    "priorityhealth": ["https://www.priorityhealth.com/provider/medical-drug-list"],
+
+    # Blue Cross Blue Shield of North Carolina
+    "bcbs": ["https://www.bluecrossnc.com/providers/policies-guidelines-codes/commercial-medical-policy-updates"],
+    "bluecross": ["https://www.bluecrossnc.com/providers/policies-guidelines-codes/commercial-medical-policy-updates"],
+    "blue cross": ["https://www.bluecrossnc.com/providers/policies-guidelines-codes/commercial-medical-policy-updates"],
+    "bcbs nc": ["https://www.bluecrossnc.com/providers/policies-guidelines-codes/commercial-medical-policy-updates"],
+    "blue cross blue shield": ["https://www.bluecrossnc.com/providers/policies-guidelines-codes/commercial-medical-policy-updates"],
+
+    # Florida Blue
+    "florida blue": ["https://www.floridablue.com/providers/tools-and-resources/clinical-guidelines-and-coverage-policies"],
+    "floridablue": ["https://www.floridablue.com/providers/tools-and-resources/clinical-guidelines-and-coverage-policies"],
+
+    # Aetna
+    "aetna": ["https://www.aetna.com/health-care-professionals/clinical-policy-bulletins/medical-clinical-policy-bulletins.html"],
 }
 
 PAYER_DOMAINS = {
     "uhc": "uhcprovider.com",
     "united": "uhcprovider.com",
+    "unitedhealthcare": "uhcprovider.com",
     "cigna": "static.cigna.com",
+    "emblemhealth": "emblemhealth.com",
+    "emblem": "emblemhealth.com",
+    "upmc": "upmchealthplan.com",
+    "upmc health plan": "upmchealthplan.com",
+    "priority health": "priorityhealth.com",
+    "priorityhealth": "priorityhealth.com",
     "bcbs": "bluecrossnc.com",
     "bluecross": "bluecrossnc.com",
+    "blue cross": "bluecrossnc.com",
+    "bcbs nc": "bluecrossnc.com",
+    "blue cross blue shield": "bluecrossnc.com",
+    "florida blue": "floridablue.com",
+    "floridablue": "floridablue.com",
     "aetna": "aetna.com",
-    "emblemhealth": "emblemhealth.com",
 }
 
-# Payers where DuckDuckGo returns bad results — skip search, go straight to index
-SKIP_SEARCH_PAYERS = ["cigna", "emblemhealth"]
+# Payers where DuckDuckGo returns bad results — go straight to index
+SKIP_SEARCH_PAYERS = [
+    "cigna",
+    "emblemhealth",
+    "emblem",
+    "priority health",
+    "priorityhealth",
+    "florida blue",
+    "floridablue",
+    "upmc",
+    "upmc health plan",
+]
+
+# BCBS name variants
+BCBS_KEYS = ["bcbs", "bluecross", "blue cross", "bcbs nc", "blue cross blue shield"]
+
 
 class ScrapeRequest(BaseModel):
     url: Optional[str] = None
     drug_name: Optional[str] = None
     payer: Optional[str] = None
 
+
 @app.on_event("startup")
 async def startup_event():
     subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=False)
     subprocess.run([sys.executable, "-m", "playwright", "install-deps", "chromium"], check=False)
 
+
 @app.get("/")
 def health():
     return {"status": "ok"}
+
 
 @app.post("/scrape")
 async def scrape(req: ScrapeRequest):
@@ -84,29 +123,41 @@ async def scrape(req: ScrapeRequest):
 async def find_and_scrape(drug_name: str, payer: str):
     payer_key = payer.lower().strip()
 
-    # Match to known payer
+    # Match to known payer — check exact match first, then partial
     matched_key = None
-    for key in PAYER_POLICY_INDEXES:
-        if key in payer_key or payer_key in key:
-            matched_key = key
-            break
+
+    # Exact match first
+    if payer_key in PAYER_POLICY_INDEXES:
+        matched_key = payer_key
+
+    # Partial match second
+    if not matched_key:
+        for key in PAYER_POLICY_INDEXES:
+            if key in payer_key or payer_key in key:
+                matched_key = key
+                break
 
     if not matched_key:
         return {
             "error": f"Payer '{payer}' not supported.",
-            "supported_payers": list(PAYER_POLICY_INDEXES.keys()),
+            "supported_payers": [
+                "UnitedHealthcare", "Cigna", "EmblemHealth",
+                "UPMC Health Plan", "Priority Health",
+                "Blue Cross Blue Shield (BCBS NC)",
+                "Florida Blue", "Aetna"
+            ],
             "raw_text": None
         }
 
     domain = PAYER_DOMAINS.get(matched_key, "")
     policy_url = None
 
-    # BCBS — use dedicated handler with URL pattern matching
-    if matched_key in ["bcbs", "bluecross"]:
+    # BCBS — use dedicated URL pattern handler
+    if matched_key in BCBS_KEYS:
         print(f"Using BCBS-specific search for {drug_name}...")
         policy_url = await find_bcbs_policy(drug_name)
 
-    # Cigna + EmblemHealth — skip DuckDuckGo, go straight to index
+    # Payers where DuckDuckGo doesn't work — go straight to index
     elif matched_key in SKIP_SEARCH_PAYERS:
         print(f"Skipping DuckDuckGo for {matched_key} — going straight to index")
 
@@ -157,7 +208,6 @@ async def find_bcbs_policy(drug_name: str) -> Optional[str]:
     try:
         drug_slug = drug_name.lower().replace(" ", "-")
 
-        # Known BCBS NC category patterns — try each
         candidate_urls = [
             f"https://www.bluecrossnc.com/providers/policies-guidelines-codes/commercial/pharmacy/updates/{drug_slug}",
             f"https://www.bluecrossnc.com/providers/policies-guidelines-codes/commercial/oncology/updates/{drug_slug}",
@@ -204,11 +254,7 @@ async def find_bcbs_policy(drug_name: str) -> Optional[str]:
 
 
 async def check_url_valid(url: str) -> bool:
-    """
-    Check if URL:
-    1. Returns HTTP 200
-    2. Does not return a soft 404
-    """
+    """Check URL returns 200 and is not a soft 404"""
     try:
         async with httpx.AsyncClient(
             timeout=10,
