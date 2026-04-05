@@ -8,12 +8,11 @@ from typing import Optional
 
 app = FastAPI()
 
-# Known payer policy search URLs
-PAYER_SEARCH_URLS = {
+# Direct policy library URLs per payer
+PAYER_POLICY_URLS = {
     "uhc": "https://www.uhcprovider.com/en/policies-protocols/commercial-policies/commercial-medical-drug-policies.html",
-    "unitedhealth": "https://www.uhcprovider.com/en/policies-protocols/commercial-policies/commercial-medical-drug-policies.html",
     "united": "https://www.uhcprovider.com/en/policies-protocols/commercial-policies/commercial-medical-drug-policies.html",
-    "cigna": "https://www.cigna.com/healthcare-professionals/resources-for-health-care-professionals/clinical-payment-and-reimbursement-policies/medical-coverage-policies",
+    "cigna": "https://static.cigna.com/assets/chcp/pdf/coveragePolicies/medical/index_of_medical_coverage_policies.pdf",
     "bcbs": "https://www.bcbsnc.com/content/providers/clinical-policy-bulletins/index.htm",
     "bluecross": "https://www.bcbsnc.com/content/providers/clinical-policy-bulletins/index.htm",
     "emblemhealth": "https://www.emblemhealth.com/providers/clinical-resources/medical-policies",
@@ -37,71 +36,109 @@ def health():
 @app.post("/scrape")
 async def scrape(req: ScrapeRequest):
     try:
-        # Mode 1: Direct URL provided
+        # Mode 1: Direct URL
         if req.url:
             if req.url.lower().endswith(".pdf") or "pdf" in req.url.lower():
                 return await scrape_pdf(req.url)
             else:
                 return await scrape_html(req.url)
 
-        # Mode 2: Drug name + payer search
+        # Mode 2: Drug + payer → find policy URL → scrape it
         if req.drug_name and req.payer:
-            return await search_and_scrape(req.drug_name, req.payer)
+            return await find_and_scrape(req.drug_name, req.payer)
 
-        return {"error": "Provide either a url or both drug_name and payer", "raw_text": None}
+        return {"error": "Provide a url OR both drug_name and payer", "raw_text": None}
 
     except Exception as e:
         return {"error": str(e), "raw_text": None}
 
 
-async def search_and_scrape(drug_name: str, payer: str):
-    """Find policy page for a drug+payer combo and scrape it"""
+async def find_and_scrape(drug_name: str, payer: str):
+    """Step 1: Find the policy URL. Step 2: Scrape it."""
     payer_key = payer.lower().strip()
 
-    # Find the base URL for this payer
-    base_url = None
-    for key in PAYER_SEARCH_URLS:
+    # Match payer to known key
+    matched_key = None
+    for key in PAYER_POLICY_URLS:
         if key in payer_key or payer_key in key:
-            base_url = PAYER_SEARCH_URLS[key]
+            matched_key = key
             break
 
-    if not base_url:
+    if not matched_key:
         return {
-            "error": f"Payer '{payer}' not recognized. Supported: UHC, Cigna, BCBS, EmblemHealth, Aetna",
-            "raw_text": None,
-            "supported_payers": list(PAYER_SEARCH_URLS.keys())
+            "error": f"Payer '{payer}' not supported yet.",
+            "supported_payers": ["uhc", "united", "cigna", "bcbs", "bluecross", "emblemhealth", "aetna"],
+            "raw_text": None
         }
 
-    # Scrape the payer's policy index page
-    # This returns the full index — Claude or your teammate will find
-    # the specific drug section from the raw text
-    result = await scrape_html(base_url)
+    # Step 1: Use DuckDuckGo to find the specific policy page
+    policy_url = await find_policy_url_duckduckgo(drug_name, payer_key)
 
-    if result.get("raw_text"):
-        # Also try a Google-style search URL for the specific drug
-        search_url = f"https://www.google.com/search?q={drug_name}+{payer}+medical+benefit+drug+policy+site:{get_payer_domain(payer_key)}"
-        result["search_url"] = search_url
-        result["payer"] = payer
-        result["drug_name"] = drug_name
-        result["payer_index_url"] = base_url
+    # Step 2: Fallback to payer index page if no specific URL found
+    if not policy_url:
+        policy_url = PAYER_POLICY_URLS[matched_key]
+
+    # Step 3: Scrape whatever URL we found
+    if policy_url.endswith(".pdf"):
+        result = await scrape_pdf(policy_url)
+    else:
+        result = await scrape_html(policy_url)
+
+    result["drug_name"] = drug_name
+    result["payer"] = payer
+    result["policy_url_found"] = policy_url
 
     return result
 
 
-def get_payer_domain(payer: str) -> str:
-    domains = {
-        "uhc": "uhcprovider.com",
-        "united": "uhcprovider.com",
-        "cigna": "cigna.com",
-        "bcbs": "bcbsnc.com",
-        "bluecross": "bcbsnc.com",
-        "aetna": "aetna.com",
-        "emblemhealth": "emblemhealth.com",
-    }
-    for key in domains:
-        if key in payer:
-            return domains[key]
-    return ""
+async def find_policy_url_duckduckgo(drug_name: str, payer: str) -> Optional[str]:
+    """Search DuckDuckGo for the specific policy page URL"""
+    try:
+        payer_domains = {
+            "uhc": "uhcprovider.com",
+            "united": "uhcprovider.com",
+            "cigna": "cigna.com",
+            "bcbs": "bcbsnc.com",
+            "bluecross": "bcbsnc.com",
+            "aetna": "aetna.com",
+            "emblemhealth": "emblemhealth.com",
+        }
+
+        domain = payer_domains.get(payer, "")
+        query = f"{drug_name} medical benefit drug policy {payer} site:{domain}"
+
+        # DuckDuckGo HTML search (no API key needed)
+        search_url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
+
+        async with httpx.AsyncClient(
+            timeout=15,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        ) as client:
+            response = await client.get(search_url, follow_redirects=True)
+            html = response.text
+
+        # Extract first result URL from DuckDuckGo HTML
+        import re
+        # DuckDuckGo result links look like: href="https://..."
+        urls = re.findall(r'href="(https://[^"]+)"', html)
+
+        # Filter to only URLs from the payer's domain
+        for url in urls:
+            if domain and domain in url:
+                # Skip search pages, prefer policy/coverage pages
+                if any(word in url.lower() for word in ["polic", "coverage", "drug", "medical", "benefit"]):
+                    return url
+
+        # Return first domain match even if not keyword filtered
+        for url in urls:
+            if domain and domain in url:
+                return url
+
+        return None
+
+    except Exception as e:
+        print(f"DuckDuckGo search failed: {e}")
+        return None
 
 
 async def scrape_pdf(url: str):
