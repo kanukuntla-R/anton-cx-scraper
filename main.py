@@ -9,7 +9,7 @@ from typing import Optional
 
 app = FastAPI()
 
-# These are verified working policy index URLs per payer
+# Verified working policy index URLs per payer
 PAYER_POLICY_INDEXES = {
     "uhc": [
         "https://www.uhcprovider.com/en/policies-protocols/commercial-policies/commercial-medical-drug-policies.html",
@@ -43,6 +43,9 @@ PAYER_DOMAINS = {
     "aetna": "aetna.com",
     "emblemhealth": "emblemhealth.com",
 }
+
+# Payers where DuckDuckGo returns bad/404 results — skip search, go straight to index
+SKIP_SEARCH_PAYERS = ["cigna", "emblemhealth"]
 
 class ScrapeRequest(BaseModel):
     url: Optional[str] = None
@@ -96,28 +99,40 @@ async def find_and_scrape(drug_name: str, payer: str):
         }
 
     domain = PAYER_DOMAINS.get(matched_key, "")
+    policy_url = None
 
-    # Step 1: Try DuckDuckGo to find specific drug policy page
-    print(f"Searching for {drug_name} policy at {payer}...")
-    policy_url = await find_policy_url_duckduckgo(drug_name, matched_key, domain)
+    # Step 1: Try DuckDuckGo ONLY for payers where it works reliably
+    if matched_key not in SKIP_SEARCH_PAYERS:
+        print(f"Searching DuckDuckGo for {drug_name} at {payer}...")
+        policy_url = await find_policy_url_duckduckgo(drug_name, matched_key, domain)
 
-    # Step 2: Validate the URL actually exists
-    if policy_url:
-        is_valid = await check_url_exists(policy_url)
-        if not is_valid:
-            print(f"Found URL is 404, falling back to index: {policy_url}")
-            policy_url = None
+        # Validate URL actually exists and has real content
+        if policy_url:
+            is_valid = await check_url_valid(policy_url)
+            if not is_valid:
+                print(f"URL invalid or 404 content, falling back: {policy_url}")
+                policy_url = None
+    else:
+        print(f"Skipping DuckDuckGo for {matched_key} — going straight to index")
 
-    # Step 3: Fallback to payer index page
+    # Step 2: Fallback to known index page
     if not policy_url:
         policy_url = PAYER_POLICY_INDEXES[matched_key][0]
         print(f"Using payer index page: {policy_url}")
 
-    # Step 4: Scrape
+    # Step 3: Scrape
     if ".pdf" in policy_url.lower():
         result = await scrape_pdf(policy_url)
     else:
         result = await scrape_html(policy_url)
+
+    # Step 4: Check if scraped content is actually a 404 page
+    raw = result.get("raw_text", "") or ""
+    if raw and ("404" in raw[:300] or "not found" in raw[:300].lower()):
+        print(f"Got 404 page content, retrying with index page")
+        fallback_url = PAYER_POLICY_INDEXES[matched_key][0]
+        result = await scrape_html(fallback_url)
+        policy_url = fallback_url
 
     result["drug_name"] = drug_name
     result["payer"] = payer
@@ -126,15 +141,29 @@ async def find_and_scrape(drug_name: str, payer: str):
     return result
 
 
-async def check_url_exists(url: str) -> bool:
-    """Check if URL returns 200 before scraping it"""
+async def check_url_valid(url: str) -> bool:
+    """
+    Check if URL:
+    1. Returns HTTP 200
+    2. Does not return a soft 404 (page says 404 but returns 200)
+    """
     try:
         async with httpx.AsyncClient(
             timeout=10,
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         ) as client:
-            response = await client.head(url, follow_redirects=True)
-            return response.status_code == 200
+            # Use GET not HEAD so we can check content too
+            response = await client.get(url, follow_redirects=True)
+
+            if response.status_code != 200:
+                return False
+
+            # Check for soft 404s (Cigna returns 200 but with 404 content)
+            content_preview = response.text[:500].lower()
+            if "404" in content_preview or "page not found" in content_preview or "not found" in content_preview:
+                return False
+
+            return True
     except:
         return False
 
@@ -153,13 +182,13 @@ async def find_policy_url_duckduckgo(drug_name: str, payer: str, domain: str) ->
 
         urls = re.findall(r'href="(https://[^"]+)"', html)
 
-        # Prefer PDF policy pages
+        # Prefer PDF policy pages first
         for url in urls:
             if domain in url and url.endswith(".pdf"):
                 if any(w in url.lower() for w in ["polic", "coverage", "drug", "medical"]):
                     return url
 
-        # Then try HTML policy pages
+        # Then HTML policy pages
         for url in urls:
             if domain in url:
                 if any(w in url.lower() for w in ["polic", "coverage", "drug", "medical", "benefit"]):
