@@ -18,8 +18,8 @@ PAYER_POLICY_INDEXES = {
         "https://www.uhcprovider.com/en/policies-protocols/commercial-policies/commercial-medical-drug-policies.html",
     ],
     "cigna": [
-        "https://www.cigna.com/healthcare-professionals/resources-for-health-care-professionals/clinical-payment-and-reimbursement-policies/medical-coverage-policies",
-    ],
+    "https://static.cigna.com/assets/chcp/pdf/coveragePolicies/medical/ad_a004_administrativepolicy_preventive_care_services.pdf",
+    ],                                                     
     "bcbs": [
         "https://www.bcbsnc.com/content/providers/clinical-policy-bulletins/index.htm",
     ],
